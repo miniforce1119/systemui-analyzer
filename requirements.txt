@@ -1,0 +1,13 @@
+# Core (필수)
+# 파서, 비교기, 보고서 생성은 외부 의존성 없음 (stdlib만 사용)
+
+# LLM Providers (선택 - 사용할 모델에 따라 설치)
+anthropic>=0.40.0    # Claude API
+# openai>=1.0.0      # OpenAI API (필요시 주석 해제)
+
+# RAG / Vector DB (6단계에서 사용)
+# chromadb>=0.4.0
+# sentence-transformers>=2.2.0
+
+# Testing
+pytest>=7.0.0
