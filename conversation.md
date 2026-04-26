@@ -202,11 +202,305 @@ mkdocs + GitHub Pages 방식 적합. 다만 매일 누적되는 리포트 특성
 
 ---
 
+## 7. 사내 포팅 아키텍처 논의
+
+> 날짜: 2026-04-18 (집에서 이어서 작업)
+
+**사용자:**
+비교 분석은 rule base(무료)이고, diff 발생 시 AI로 원인 추론하는 건 API 방식이 되는 거지? 회사에서는 Agent Builder로 생성된 Agent를 통해서 사용하면 제약 없이 사용 가능한데, 사내로 가져갈 때 어떤 차이점이 발생하는지 체크하고 싶어.
+
+**AI:**
+외부(API)와 사내(Agent Builder) 방식의 차이를 정리:
+
+| 항목 | 외부 (현재) | 사내 (Agent Builder) |
+|---|---|---|
+| 호출 방식 | Python → REST API 직접 호출 | Python → Agent Builder 엔드포인트 호출 |
+| 인증 | API Key (유료, 건당 과금) | 사내 인증 (무료, 제약 없음) |
+| LLM 선택 | 코드에서 모델 지정 | Agent Builder 안에서 설정됨 |
+| 프롬프트 관리 | Python 코드 안에 하드코딩 | Agent Builder 노드에서 관리 |
+
+사내 포팅 시나리오 2가지:
+- **시나리오 A:** Agent Builder를 LLM 호출 도구로만 사용 → `InternalProvider`만 구현
+- **시나리오 B:** Agent Builder가 전체 워크플로우(LLM+메일+DB) 관리 → Python은 파싱 라이브러리 역할만
+
+제안서 목적이 "Agent Builder를 잘 쓰는 사람 양성"이므로 **시나리오 B를 추천**.
+
+**사용자:**
+Agent Builder의 API 엔드포인트 사용은 이미 있고, 다수의 경험이 있어서 어렵지 않아.
+
+**AI:**
+최종 확정 구조:
+
+```
+Python (파싱·비교)  ──JSON──→  Agent Builder (LLM·메일·DB)
+   GitHub에서 개발                사내에서 조립
+```
+
+- `comparator.to_dict()` → JSON 출력은 이미 구현 완료
+- GitHub에서는 `parser/`와 `analyzer/`의 완성도를 높이는 것에 집중
+- `llm/`과 `report/`는 외부 테스트/데모용으로 유지, 사내에서는 Agent Builder가 대체
+
+### 모듈별 역할 확정
+
+| 모듈 | GitHub 유지 | 사내에서 대체 |
+|---|---|---|
+| `parser/` | ✅ 핵심. 그대로 사용 | - |
+| `analyzer/comparator.py` | ✅ 핵심. 그대로 사용 | - |
+| `llm/` | 외부 테스트용 유지 | Agent Builder LLM 노드 |
+| `report/` | 외부 테스트용 유지 | Agent Builder 출력 노드 |
+| `rag/` | 구조 설계만 | Agent Builder + 사내 벡터DB |
+
+---
+
+## 8. 자동화 파이프라인 설계 논의
+
+> 날짜: 2026-04-18
+
+**사용자:**
+궁극적 목표는 새 버전 등록 시 자동으로 분석하는 것. 현재 수동 워크플로우:
+
+1. regression 시스템 접속 → 과제 선택 → 버전 목록 확인
+2. 기준 모델과 최신 버전 비교 → 특이점 확인
+3. 이상 있으면 최근 2개 비교 → 트렌드 확인
+4. 이상 계속되면 5개 전체 트렌드 → 튀는 버전 찾기
+5. 튀는 버전 전후 상세 비교 → 원인 파악
+
+이 과정에서 사람의 판단·선택 행위가 많이 들어감. 이걸 자동화하고 싶음.
+
+**AI:**
+이건 단순 자동화가 아니라 "자율 판단 에이전트". 각 단계 결과를 보고 다음 행동을 결정하는 구조. Agent Builder 과제 취지에 정확히 부합.
+
+판단 1~3은 rule base로 충분하고, AI는 최종 원인 추론에만 집중시키는 게 현실적 (사내 모델 성능 고려).
+
+### 데이터 수집 방식 확인
+
+**사용자:**
+regression 시스템은 웹에서 다운로드 버튼으로 txt 파일을 받는 방식. 버전별로 3회 테스트 결과(dumpsys meminfo 전체)와 bugreport가 포함되어 있음. bugreport는 문제 해결 시 참고용.
+
+**AI:**
+API가 없으므로 데이터 수집은 브라우저 자동화(Selenium/Playwright)가 필요.
+
+### 자동화 파이프라인 전체 흐름 (확정)
+
+```
+[1단계] 브라우저 자동화
+        - regression 시스템 로그인
+        - 과제 선택 → 버전 목록 가져오기
+        - 필요한 버전의 meminfo txt 다운로드
+              ↓
+[2단계] Python rule base
+        - 파싱 → 비교 → 이상 판별
+              ↓
+        이상 없으면 → "정상" 기록 → 끝
+        이상 있으면 ↓
+              ↓
+[1단계 재진입] 추가 버전 다운로드 (트렌드 비교용)
+              ↓
+[2단계 재진입] N개 트렌드 비교 → 튀는 버전 전후 비교
+              ↓
+[3단계] LLM 원인 추론 (Agent Builder)
+        - 필요시 bugreport도 참고자료로 전달
+              ↓
+[4단계] 리포트 생성 + 메일 알림
+```
+
+핵심: 1단계와 2단계가 판단 결과에 따라 왔다 갔다 함. 이것이 단순 크롤링이 아니라 "에이전트"인 이유.
+
+### 기술 스택 결정
+
+**브라우저 자동화: Playwright 확정**
+- 사용자가 이미 사내 사이트 로그인 자동화를 Playwright로 운영 중
+- regression 시스템 UI가 수년간 변경 없이 유지보수 수준 → 브라우저 자동화가 깨질 리스크 낮음
+- 기존 Playwright 코드 패턴을 재활용하여 regression 시스템 데이터 수집 모듈 개발 예정
+
+### 3회 테스트 데이터 처리
+
+**사용자:** regression 시스템 UI에서는 3회 평균값을 보여주고 있음.
+
+**AI:** 기존 시스템과 일관성 유지를 위해 3회 평균값 사용으로 결정.
+
+parser에 평균 계산 기능 추가 필요:
+```
+3개 파일 각각 파싱 → 평균 MeminfoResult 1개 → comparator에 전달
+```
+
+---
+
+## 9. 자동화 범위 결정 — Phase A / B 분리
+
+> 날짜: 2026-04-18
+
+**사용자:**
+처음부터 끝까지 완전 자동화할지, 사람이 판단·파일 수집까지 하고 그 뒤부터 자동화할지 갈등. 완전 자동화하면 사람이 관심을 안 갖게 될 것 같음.
+
+**AI:**
+단계적 접근 제안. 사용자 동의.
+
+### Phase A (우선): 반자동 — 사람이 판단, 분석·문서화는 자동
+
+```
+[사람] 시스템 접속 → 버전 비교 → 문제 발견 → 파일 다운로드
+   ↓
+[자동] 파싱 → 비교 분석 → LLM 원인 추론 → 보고서 생성
+```
+
+- 시간 소모의 핵심(건당 2~4시간)인 분석·문서화를 먼저 자동화
+- 사람이 매번 시스템에 들어가므로 관심 유지 자연스러움
+- 과제 기간 내 확실히 완성 가능
+
+### Phase B (여유 시): 완전 자동 — 새 버전 감지부터 알림까지
+
+```
+[자동] 새 버전 감지 → 다운로드 → 비교 → 이상 판별 → 알림/리포트
+[사람] 알림 확인 → 필요시 추가 조치
+```
+
+- Phase A가 안정적으로 동작한 뒤에 진행
+- 앞에 Playwright를 붙이는 확장 형태
+- 관심 유지는 주간 요약 리포트 + 이상 시 즉시 알림으로 해결
+
+---
+
+## 10. 실제 데이터 구조 확인 — zip 내부 및 파일 역할 정정
+
+> 날짜: 2026-04-18
+
+### regression 시스템 다운로드 구조
+
+```
+zip 파일 (버전당, 테스트 회차당 1개)
+├── dump/                        ← bugreport 상세 로그
+├── boot_stat
+├── dumpsys_activity
+├── dumpsys_meminfo_all          ← ★ 각 프로세스별 상세 meminfo (parser 입력)
+├── dumpsys_meminfo              ← 전체 프로세스 간략 PSS 목록 (순위 확인용)
+├── features
+├── property
+├── system_floating_feature      ← 삼성 전용
+├── vendor_floating_feature      ← 삼성 전용
+└── proc_meminfo                 ← 커널 레벨 메모리 정보
+```
+
+### 파일 역할 정정
+
+초기에 혼동이 있었으나, 실제 스크린샷 확인 후 정정:
+
+| 파일 | 실제 내용 | 용도 |
+|---|---|---|
+| `dumpsys_meminfo` | 전체 프로세스 간략 PSS 목록 (프로세스별 1줄 요약) | SystemUI의 전체 순위, 상대적 점유율 확인 |
+| `dumpsys_meminfo_all` | 각 프로세스별 상세 meminfo (Pss, App Summary, Objects 등) | **★ parser의 실제 입력 파일** |
+
+### parser 추가 필요 사항
+
+1. **프로세스 추출 기능**: `dumpsys_meminfo_all`에서 `com.android.systemui` 섹션만 추출하는 기능 필요 (현재는 단일 프로세스 파일만 처리)
+2. **TOTAL SWAP RSS** 파싱 추가 (실제 데이터에 존재)
+3. **Dalvik Details** 파싱 추가 (실제 데이터에 존재)
+4. 삼성 전용 Objects 항목은 없음 확인 — 표준 AOSP 포맷과 동일
+
+### 분석 파이프라인 (확정)
+
+```
+dumpsys_meminfo_all → SystemUI 섹션 추출 → parser → comparator → LLM
+dumpsys_meminfo     → 전체 순위에서 SystemUI 위치 확인 (보조 정보)
+```
+
+---
+
+## 11. Phase A 핵심 파이프라인 구현 및 E2E 테스트
+
+> 날짜: 2026-04-18 (집에서 작업)
+
+### 구현 완료 항목
+
+**새 모듈: `extractor.py`**
+- `scan_download_folder()` — 다운로드 폴더 스캔, 파일명 패턴(`{버전}_ram_{회차}_{날짜}_{시간}.zip`)으로 버전/회차 자동 분류
+- `extract_process_section()` — `dumpsys_meminfo_all`에서 특정 프로세스(SystemUI) 섹션만 추출
+- `extract_meminfo_from_zip()` — zip 열기 → `dumpsys_meminfo_all` 찾기 → SystemUI 추출
+- `process_version()` — 한 버전의 3회 zip 전체 처리 (추출→파싱→평균)
+- `average_meminfo_results()` — 3회 MeminfoResult 평균 계산
+
+**CLI `analyze` 명령 추가 (`cli.py`)**
+```bash
+# 버전 목록 확인
+python -m systemui_analyzer analyze ./downloads --list
+
+# 두 버전 비교 (축약 버전명 지원)
+python -m systemui_analyzer analyze ./downloads --baseline AZDD --target AZDE
+
+# 보고서 파일 저장
+python -m systemui_analyzer analyze ./downloads --baseline AZDD --target AZDE -o report.md
+
+# LLM 분석 포함
+python -m systemui_analyzer analyze ./downloads --baseline AZDD --target AZDE --llm claude --api-key KEY
+```
+
+**테스트: `test_extractor.py` (6개 케이스, 전체 11개 통과)**
+
+### E2E 테스트 실행
+
+회사 다운로드 구조와 동일한 테스트 데이터(2버전 × 3회차)를 생성하여 전체 파이프라인을 검증:
+
+```
+테스트 데이터 생성 (create_test_data.py)
+    ↓
+python -m systemui_analyzer analyze ./test_downloads --baseline AZDD --target AZDE -o report.md
+    ↓
+zip 자동 분류 → 압축 해제 → SystemUI 추출 → 3회 평균 → 비교 분석 → MD 보고서
+    ↓
+Documents 레포(https://github.com/miniforce1119/Documents)에 push
+    ↓
+GitHub Pages 자동 배포 → https://miniforce1119.github.io/Documents/
+```
+
+### 생성된 보고서 결과 (테스트 데이터 기준)
+
+| 지표 | Baseline (AZDD) | Target (AZDE) | 변화 |
+|---|---|---|---|
+| Total PSS | 76,009 KB | 109,700 KB | +44.3% 🔴 |
+| Top 1 | Java Heap | +18,915 KB | +73.5% 🔴 |
+| Top 2 | Dalvik Heap | +16,447 KB | +73.5% 🔴 |
+| Top 3 | Native Heap | +10,787 KB | +70.8% 🔴 |
+| Views | 456 → 900 | +444 | 🟡 |
+
+**참고:** 이번 테스트는 Documents 레포에 올렸지만, 이후 분석 보고서는 **별도 전용 저장소**를 만들어서 관리할 예정.
+
+### 보고서 시각화 강화
+
+보고서에 Mermaid 차트 + AI 분석 시뮬레이션을 추가:
+
+- **막대 차트 (xychart):** Total PSS/RSS 비교, 섹션별 Baseline vs Regression
+- **파이 차트:** 메모리 증가 기여도 비율
+- **AI 원인 가설:** 가설 3개 (Activity Leak, Bitmap 캐시, 알림 누수) + 신뢰도·근거·확인방법
+- **조사 흐름도:** Mermaid 플로우차트로 분석 절차 시각화
+- **분석자 기록 영역:** Human-in-the-loop (담당자가 실제 원인·조치 기록)
+- mkdocs.yml에 Mermaid 렌더링 설정 추가
+
+모두 Mermaid 코드블록으로 마크다운만으로 렌더링 — 별도 이미지 관리 불필요.
+
+배포 확인: https://miniforce1119.github.io/Documents/ → 분석 → SystemUI Memory Regression
+
+---
+
 ## 다음 단계 (예정)
 
-- [ ] mkdocs 설정 및 GitHub Pages 배포
-- [ ] 분석 보고서 템플릿 (자동 생성 + 분석자 기록 영역)
-- [ ] dumpstate 파서 개발 (삼성 추가 로그 포함)
+### Phase A (현재 집중)
+- [x] parser: dumpsys_meminfo_all에서 특정 프로세스 섹션 추출 기능
+- [x] parser 평균 계산 기능 (3회 테스트 → 평균 MeminfoResult)
+- [x] CLI analyze 명령 (폴더 → 자동 분석 파이프라인)
+- [x] E2E 테스트 및 문서 파이프라인 연동 검증
+- [x] 보고서 시각화 (Mermaid 차트 + AI 분석 시뮬레이션)
+- [ ] parser: TOTAL SWAP RSS 파싱 추가
+- [ ] parser: Dalvik Details 파싱 추가
+- [ ] comparator N개 트렌드 비교 기능
+- [ ] 이상 판별 rule 정의 (임계값·기준 명확화)
 - [ ] LLM 분석 실제 실행 및 프롬프트 튜닝
+- [ ] 보고서 생성기에 Mermaid 차트 자동 삽입 기능 통합
+- [ ] dumpstate 파서 개발 (삼성 추가 로그 포함)
 - [ ] RAG / 벡터 DB 유사 사례 검색
 - [ ] Agent Builder(Langflow) 연동용 컴포넌트 설계
+- [ ] 분석 보고서 전용 저장소 생성
+
+### Phase B (여유 시)
+- [ ] 브라우저 자동화 모듈 — Playwright (regression 시스템 데이터 수집)
+- [ ] 새 버전 감지 트리거 (webhook 또는 polling)
+- [ ] 자동 알림 시스템 (이상 감지 시 메일 발송)

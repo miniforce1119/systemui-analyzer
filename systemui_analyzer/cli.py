@@ -2,6 +2,12 @@
 SystemUI Analyzer CLI 엔트리포인트
 
 사용법:
+  # 다운로드 폴더에서 자동 분석 (Phase A 핵심 기능)
+  python -m systemui_analyzer analyze ./downloads --baseline S948NKSU2AZDD --target S948NKSU2AZDE
+
+  # 버전 목록만 확인
+  python -m systemui_analyzer analyze ./downloads --list
+
   # 기본 비교 분석 (LLM 없이)
   python -m systemui_analyzer compare baseline.txt regression.txt
 
@@ -29,6 +35,7 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 from .parser import MeminfoParser
 from .analyzer import MeminfoComparator
 from .report import ReportGenerator
+from .extractor import scan_download_folder, process_version
 
 
 def cmd_parse(args):
@@ -106,6 +113,128 @@ def cmd_compare(args):
         print(report_gen.generate_json_summary(comparison))
 
 
+def cmd_analyze(args):
+    """다운로드 폴더에서 자동 분석 (Phase A 핵심 기능)
+
+    사용자가 regression 시스템에서 Download All로 받은 파일들을
+    자동으로 분류 → 압축 해제 → SystemUI 추출 → 파싱 → 평균 → 비교 분석
+    """
+    # 1. 다운로드 폴더 스캔
+    versions = scan_download_folder(args.folder)
+
+    if not versions:
+        print(f"오류: '{args.folder}'에서 zip 파일을 찾을 수 없습니다.")
+        print("파일명 패턴: {버전}_ram_{회차}_{날짜}_{시간}.zip")
+        return
+
+    # 버전 목록 출력
+    print(f"=== 발견된 버전 ({len(versions)}개) ===")
+    for ver_name, ver_data in versions.items():
+        rounds = [str(r) for r, _ in ver_data.zip_files]
+        print(f"  {ver_name} ({len(ver_data.zip_files)}회 테스트: {', '.join(rounds)})")
+    print()
+
+    # --list 옵션이면 목록만 출력하고 종료
+    if args.list:
+        return
+
+    # 2. baseline과 target 확인
+    if not args.baseline or not args.target:
+        print("오류: --baseline과 --target 버전을 지정하세요.")
+        print("예: python -m systemui_analyzer analyze ./downloads "
+              f"--baseline {list(versions.keys())[0]} --target {list(versions.keys())[-1]}")
+        return
+
+    # 부분 매칭 지원 (뒤 4자리만 입력해도 매칭)
+    baseline_key = _match_version(args.baseline, versions)
+    target_key = _match_version(args.target, versions)
+
+    if not baseline_key:
+        print(f"오류: baseline 버전 '{args.baseline}'을 찾을 수 없습니다.")
+        return
+    if not target_key:
+        print(f"오류: target 버전 '{args.target}'을 찾을 수 없습니다.")
+        return
+
+    print(f"Baseline: {baseline_key}")
+    print(f"Target:   {target_key}")
+    print()
+
+    # 3. 각 버전 처리: zip 해제 → SystemUI 추출 → 파싱 → 평균
+    process_name = args.process or "com.android.systemui"
+
+    print(f"[1/4] {baseline_key} 처리 중...")
+    baseline_data = process_version(versions[baseline_key], process_name)
+    if not baseline_data.average:
+        print(f"오류: {baseline_key}에서 {process_name} 데이터를 추출할 수 없습니다.")
+        return
+    print(f"  → {len(baseline_data.parsed_results)}회 파싱 완료, "
+          f"평균 PSS: {baseline_data.average.total_pss_kb:,} KB")
+
+    print(f"[2/4] {target_key} 처리 중...")
+    target_data = process_version(versions[target_key], process_name)
+    if not target_data.average:
+        print(f"오류: {target_key}에서 {process_name} 데이터를 추출할 수 없습니다.")
+        return
+    print(f"  → {len(target_data.parsed_results)}회 파싱 완료, "
+          f"평균 PSS: {target_data.average.total_pss_kb:,} KB")
+
+    # 4. 비교 분석
+    print("[3/4] 비교 분석 중...")
+    comparator = MeminfoComparator()
+    comparison = comparator.compare(baseline_data.average, target_data.average)
+
+    # LLM 분석 (선택)
+    analysis = None
+    if args.llm:
+        print("[4/4] AI 분석 중...")
+        analysis = _run_llm_analysis(args, comparison)
+    else:
+        print("[4/4] AI 분석 건너뜀 (--llm 옵션으로 활성화)")
+
+    # 5. 보고서 생성
+    report_gen = ReportGenerator()
+    report = report_gen.generate_markdown(
+        comparison,
+        analysis=analysis,
+        baseline_file=f"{baseline_key} (3회 평균)",
+        regression_file=f"{target_key} (3회 평균)",
+    )
+
+    if args.output:
+        filepath = report_gen.save_report(report, filename=args.output)
+        print(f"\n보고서 저장: {filepath}")
+    else:
+        print()
+        print(report)
+
+    if args.json:
+        print("\n=== JSON Summary ===")
+        print(report_gen.generate_json_summary(comparison))
+
+
+def _match_version(query: str, versions: dict) -> str | None:
+    """버전명 부분 매칭 (뒤 4~5자리만 입력해도 매칭)
+
+    예: "AZDE" → "S948NKSU2AZDE"
+    """
+    # 정확한 매칭
+    if query in versions:
+        return query
+
+    # 부분 매칭 (끝부분)
+    matches = [k for k in versions if k.endswith(query)]
+    if len(matches) == 1:
+        return matches[0]
+
+    # 부분 매칭 (포함)
+    matches = [k for k in versions if query in k]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
 def _run_llm_analysis(args, comparison):
     """LLM 분석 실행"""
     from .llm import LLMAnalyzer
@@ -137,6 +266,31 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="명령어")
 
+    # analyze 명령 (Phase A 핵심)
+    analyze_parser = subparsers.add_parser(
+        "analyze", help="다운로드 폴더에서 자동 분석"
+    )
+    analyze_parser.add_argument("folder", help="다운로드 폴더 경로")
+    analyze_parser.add_argument(
+        "--baseline", help="기준 버전 (예: S948NKSU2AZDD 또는 AZDD)"
+    )
+    analyze_parser.add_argument(
+        "--target", help="비교 대상 버전 (예: S948NKSU2AZDE 또는 AZDE)"
+    )
+    analyze_parser.add_argument(
+        "--list", action="store_true", help="버전 목록만 출력"
+    )
+    analyze_parser.add_argument(
+        "--process", default="com.android.systemui",
+        help="분석할 프로세스명 (기본: com.android.systemui)"
+    )
+    analyze_parser.add_argument("-o", "--output", help="보고서 출력 파일명")
+    analyze_parser.add_argument("--json", action="store_true", help="JSON 요약도 출력")
+    analyze_parser.add_argument(
+        "--llm", choices=["claude", "openai"], help="LLM 분석 활성화"
+    )
+    analyze_parser.add_argument("--api-key", help="LLM API 키")
+
     # parse 명령
     parse_parser = subparsers.add_parser("parse", help="meminfo 파일 파싱")
     parse_parser.add_argument("file", help="dumpsys meminfo 출력 파일")
@@ -155,7 +309,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "parse":
+    if args.command == "analyze":
+        cmd_analyze(args)
+    elif args.command == "parse":
         cmd_parse(args)
     elif args.command == "compare":
         cmd_compare(args)
