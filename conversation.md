@@ -543,6 +543,54 @@ Python comparator.to_dict() → JSON → Agent Builder Input → LLM → 원인 
 
 ---
 
+## 14. Agent Builder 구성 논의 및 시각화 보고서 템플릿
+
+> 날짜: 2026-04-28
+
+**사용자:**
+Agent Builder가 하는 역할과 component 구성을 설명해줘.
+
+**AI:**
+Python = "뭐가 변했는지(What)", Agent Builder = "왜 변했는지(Why) + 후속 액션"
+
+Agent Builder Flow 구성:
+```
+Input(JSON) → Prompt Template → LLM → (메일 노드) → Response
+```
+- Input: Python comparator.to_dict()의 JSON
+- Prompt Template: SYSTEM_PROMPT + TRIAGE_PROMPT_TEMPLATE
+- LLM: 사내 승인 모델
+- 메일: 나중에 추가
+
+**사용자:**
+Output Parser 꼭 써야 해?
+
+**AI:** 필요 없음. LLM 응답이 이미 마크다운 텍스트라 Python에서 그대로 report.md에 삽입하면 됨.
+
+**사용자:**
+메일 노드까지 붙이면 Agent Builder를 두 번 호출해야 하는 거 아냐?
+
+**AI:**
+Agent Builder 호출 한 번에 LLM + 메일 다 처리하는 게 가장 깔끔함:
+```
+Input → Prompt → LLM → 메일 노드 → Response
+```
+Python은 응답 받아서 report.md + mkdocs만 처리.
+
+**사용자:**
+시각화 들어간 보고서 템플릿을 Cline에게 알려주고 싶어.
+
+**AI:**
+`report_template_visual.md` 생성. 포함된 시각화 요소:
+- Mermaid xychart: Total PSS/RSS 비교, 섹션별 비교 막대 차트
+- Mermaid pie: 메모리 증가 기여도 비율
+- Mermaid flowchart: 조사 흐름도
+- AI 가설 3개 (Activity Leak, Bitmap 캐시, Binder 누수) + 확인 명령어
+- 조치 권고 테이블 (우선순위별)
+- 분석자 기록 영역 (Human-in-the-loop)
+
+---
+
 ## 다음 단계 (예정)
 
 ### Phase A (현재 집중)
