@@ -625,6 +625,34 @@ python -m systemui_hprof_analyzer analyze ./test_data --scenario idle -o report.
 python -m systemui_hprof_analyzer hprof-diff before.hprof after.hprof
 ```
 
+## 16. 두 버전 비교(compare) 기능 추가 및 사용 흐름 확정
+
+> 날짜: 2026-04-28
+
+**사용자:**
+실제 사용 흐름은 regression 시스템에서 두 버전을 선택 → 비교 화면 → 각 버전 다운로드 → 분석.
+주로 두 버전 비교를 meminfo로 해서 특정 시나리오에서 증가가 있으면, 한 버전 내부에서 hprof 분석할 수도 있고, 두 버전 간 비교할 수도 있음.
+
+**AI:**
+2단계 분석 흐름 확정:
+
+```
+1단계: compare (두 버전 시나리오별 meminfo 평균 비교)
+  → regression 감지 시 자동으로 2단계 진입
+
+2단계: 심층 분석
+  ├── 방법 A: Target 내부 hprof before vs after (이 버전에서 뭐가 새는지)
+  └── 방법 B: Baseline after vs Target after (이전 버전에 없던 게 뭔지)
+```
+
+구현 완료:
+- `version_comparator.py`: 두 버전 비교 + 자동 심층 분석
+- CLI `compare` 명령: `--no-deep` 옵션으로 빠른 비교 가능
+- 비교 보고서: 1단계 비교표 + 2단계 심층분석 + Mermaid 차트
+- `USAGE_GUIDE.md`: 4가지 사용 시나리오 상세 가이드
+
+GitHub: https://github.com/miniforce1119/SystemUI-HProf-Analyzer
+
 ---
 
 ## 다음 단계 (예정)
