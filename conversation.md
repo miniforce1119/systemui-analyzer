@@ -591,6 +591,42 @@ Python은 응답 받아서 report.md + mkdocs만 처리.
 
 ---
 
+## 15. 2번 테스트 시스템 발견 및 신규 프로젝트 생성
+
+> 날짜: 2026-04-28
+
+**사용자:**
+회사에 regression 테스트가 두 군데 있었음. 1번 시스템은 meminfo만, 2번 시스템은 **hprof(before/after) + meminfo + gfxinfo + showmap + smaps + bugreport**까지 수집.
+
+**2번 시스템 데이터 구조:**
+- 시나리오 3개: idle, quickpanelopenclose, screenonoff (삼성=AOD, SystemUI 프로세스)
+- 각 시나리오 20회 반복
+- hprof는 시나리오당 before/after 1장씩 (각 125MB)
+- meminfo는 `dumpsys meminfo com.android.systemui` 단일 프로세스 출력
+
+**결정:** hprof가 있으면 LLM 추측이 아닌 팩트 기반 분석 가능 → 2번 시스템 기준으로 별도 프로젝트 생성
+
+**AI:**
+`SystemUI HProf Analyzer` 프로젝트 생성 (로컬: `c:/김우근/project/SystemUI HProf Analyzer/`)
+
+구현 완료:
+- **extractor/scanner.py** — zip 해제, 시나리오/회차별 파일 자동 분류
+- **parser/meminfo_parser.py** — 기존 + TOTAL SWAP PSS, Native Allocations, Mapped Bitmap 추가
+- **parser/hprof_parser.py** — AOSP 표준 hprof 바이너리 파서 (클래스별 인스턴스/메모리, before vs after diff)
+- **analyzer/scenario_analyzer.py** — meminfo 20회 평균 + hprof diff 통합 분석
+- **report/generator.py** — Mermaid 시각화 (PSS 추이 라인차트, 객체 증가 파이차트, 인스턴스 증가 TOP 15 테이블)
+- **cli.py** — scan, analyze, hprof-diff, parse-meminfo 명령
+- **.clinerules** — Cline 수정 권한 제어
+
+CLI 사용법:
+```bash
+python -m systemui_hprof_analyzer scan ./test_data
+python -m systemui_hprof_analyzer analyze ./test_data --scenario idle -o report.md
+python -m systemui_hprof_analyzer hprof-diff before.hprof after.hprof
+```
+
+---
+
 ## 다음 단계 (예정)
 
 ### Phase A (현재 집중)
