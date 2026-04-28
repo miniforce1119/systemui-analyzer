@@ -481,6 +481,68 @@ GitHub Pages 자동 배포 → https://miniforce1119.github.io/Documents/
 
 ---
 
+## 12. Agent Builder 포팅 구조 상세 논의
+
+> 날짜: 2026-04-27
+
+**사용자:**
+회사 데이터를 다운로드 받아서 회사에서 테스트 해보고 싶어. Agent Builder를 사용해야 할 부분이 원인 분석인데, 이 부분이 어떻게 포팅되는지 자세히 설명해줘.
+
+**AI:**
+현재 코드에서 LLM 호출 지점과 Agent Builder 포팅 매핑을 상세 설명:
+
+**데이터 흐름:**
+```
+Python comparator.to_dict() → JSON → Agent Builder Input → LLM → 원인 가설 반환
+```
+
+**포팅 대상 매핑:**
+| 현재 코드 | Agent Builder에서 대체 |
+|---|---|
+| `prompts.py` → `SYSTEM_PROMPT` | LLM 노드의 System Message |
+| `prompts.py` → `TRIAGE_PROMPT_TEMPLATE` | Prompt Template 노드 |
+| `analyzer.py` → `provider.generate()` | Agent Builder 내부 LLM 호출 |
+| 사내 메일 발송 | Agent Builder 메일 노드 |
+
+**InternalProvider 구현 가이드 제공:**
+- Agent Builder의 API 엔드포인트를 `requests.post()`로 호출하는 구조
+- `base.py`의 `InternalProvider` 클래스만 구현하면 연동 완료
+
+---
+
+## 13. 사내 포팅 가이드 및 Cline 작업 규칙 생성
+
+> 날짜: 2026-04-28
+
+**사용자:**
+회사 안에서 작업해볼 거야. 회사에는 Cline 기반이거든. 포팅 가이드를 Cline이 수행할 수 있도록 만들어줘. 꼭 수정해야 하는 파일 리스트를 만들고 Cline이 임의로 파일 수정하지 못하도록 조치하고 싶어.
+
+**AI:**
+2개 파일 생성:
+
+**1. PORTING_GUIDE.md** — 포팅 작업 전체 가이드
+- Task 1: 실제 데이터로 기본 파이프라인 테스트 (LLM 없이)
+- Task 2: InternalProvider 구현 (Agent Builder 연동)
+- Task 3: 프롬프트 튜닝 (선택)
+- 검증 체크리스트 포함
+
+**2. .clinerules** — Cline 수정 권한 제어
+
+수정 가능 파일 (화이트리스트):
+
+| 구분 | 파일 | 수정 범위 |
+|------|------|-----------|
+| 필수 | `llm/base.py` | InternalProvider 구현 |
+| 조건부 | `llm/prompts.py` | 사내 모델 맞춤 튜닝 |
+| 조건부 | `parser/meminfo_parser.py` | 파싱 에러 시에만 |
+| 조건부 | `extractor.py` | 추출 실패 시에만 |
+| 조건부 | `analyzer/comparator.py` | 임계값 조정만 |
+| 조건부 | `cli.py` | `--llm internal` 분기 추가만 |
+
+그 외 모든 파일은 수정 금지.
+
+---
+
 ## 다음 단계 (예정)
 
 ### Phase A (현재 집중)

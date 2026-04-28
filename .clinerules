@@ -1,0 +1,45 @@
+# Cline Rules — SystemUI Analyzer 사내 포팅
+
+## 역할
+당신은 사내 환경에 이 프로젝트를 포팅하는 작업을 수행합니다.
+반드시 PORTING_GUIDE.md를 먼저 읽고 작업하세요.
+
+## 수정 가능 파일 (화이트리스트)
+아래 파일만 수정할 수 있습니다. 그 외 파일은 절대 수정하지 마세요.
+
+### 반드시 수정
+- systemui_analyzer/llm/base.py → InternalProvider 클래스 구현
+
+### 조건부 수정 (해당 문제 발생 시에만)
+- systemui_analyzer/llm/prompts.py → 사내 모델에 맞게 프롬프트 튜닝
+- systemui_analyzer/parser/meminfo_parser.py → 파싱 에러 발생 시에만
+- systemui_analyzer/extractor.py → zip 추출 실패 시에만
+- systemui_analyzer/analyzer/comparator.py → THRESHOLDS 임계값 조정만
+- systemui_analyzer/cli.py → _run_llm_analysis 함수 내 provider 분기 추가와 --llm choices에 "internal" 추가만 허용
+
+## 절대 수정 금지
+- systemui_analyzer/__init__.py
+- systemui_analyzer/__main__.py
+- systemui_analyzer/llm/__init__.py
+- systemui_analyzer/llm/analyzer.py
+- systemui_analyzer/report/*
+- systemui_analyzer/tests/*
+- systemui_analyzer/rag/*
+- create_test_data.py
+- conversation.md
+- conversation_raw.md
+- PORTING_GUIDE.md
+- .clinerules
+
+## 작업 순서
+1. PORTING_GUIDE.md를 읽는다
+2. Task 1: 실제 다운로드 데이터로 기본 파이프라인 테스트 (LLM 없이)
+3. 파싱/추출 에러가 있으면 해당 파일만 최소한으로 수정
+4. Task 2: InternalProvider 구현 (Agent Builder 연동)
+5. Task 3: 프롬프트 튜닝 (필요시)
+
+## 코딩 규칙
+- 기존 코드 스타일(dataclass, type hints, docstring)을 유지
+- 새 파일을 만들지 말 것 — 기존 파일 내에서 수정
+- 새 의존성(pip install)은 최소화 — requests만 추가 허용
+- 사내 엔드포인트, API 키 등 민감 정보는 코드에 하드코딩하지 말고 환경변수 또는 인자로 받을 것
