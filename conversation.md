@@ -655,6 +655,59 @@ GitHub: https://github.com/miniforce1119/SystemUI-HProf-Analyzer
 
 ---
 
+## 17. PSS 추이 통계 + MAT CLI 연동 방향 결정
+
+> 날짜: 2026-04-29
+
+### PSS 추이 통계 추가
+20회 반복 데이터에서 "튀는 값"을 어떻게 처리할지 논의.
+- Trimmed Mean (상하 10% 제거), 중앙값, 표준편차 추가
+- 이상치 감지 (평균 ± 2σ), 이상치 제거 후 평균 계산
+- 누수 판정 (이상치 제거 후 1% 이상 증가 시)
+- `scenario_analyzer.py`에 `TrendStats` 구현 완료
+
+### MAT CLI 연동 결정 과정
+
+**hprof 참조 체인 분석 방법 논의:**
+- A안: Python 파서에 직접 구현 → 난이도 높음, 성능 부담
+- B안: MAT CLI 활용 → 20년 검증, 정확함, Java 필요
+- **B안 채택** → 사내 PC에 OpenJDK Temurin + MAT 설치 완료
+
+**MAT GUI로 실제 테스트:**
+- hprof-conv로 변환 필요 (Android hprof → 표준 Java hprof)
+- MAT Strictness를 Permissive로 변경해야 삼성 hprof 열림
+- Leak Suspects 리포트 확인 → Problem Suspect 1: java.lang.Class (런타임 기본)
+- before vs after Compare 기능 확인 → 정상 동작
+
+**최종 보고서 방향 결정:**
+
+현재:
+```
+인스턴스 증가 TOP 15 → "뭐가 늘었는지"만 보임
+```
+
+MAT 추가 후:
+```
+인스턴스 증가 TOP 15 → 각각의 참조 체인(Path to GC Roots)
+  → "어떤 코드를 수정해야 하는지" 바로 보임
+```
+
+**중요 결정:** TOP 15에서 framework 클래스(Bitmap, TextView 등)를 필터링하지 않음.
+참조 체인을 추적하면 결국 SystemUI 코드가 나오므로 필터링하면 오히려 정보 손실.
+
+### Cline 작업으로 위임
+MAT는 사내 PC에 설치되어 있고 실제 hprof도 사내에만 있으므로
+MAT CLI 연동(hprof-conv 자동화 + ParseHeapDump + 결과 파싱)은 Cline이 구현.
+
+사내 환경:
+- hprof-conv: `C:/tools/platform-tools-latest-windows/platform-tools/hprof-conv.exe`
+- MAT: 사내 PC 설치됨
+- Java: OpenJDK Temurin 설치됨
+
+`.clinerules`와 `USAGE_GUIDE.md`에 MAT CLI 연동 가이드 반영 완료.
+
+---
+
 ## 다음 단계 (예정)
 
 ### Phase A (현재 집중)
